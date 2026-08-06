@@ -1,0 +1,74 @@
+name: Build C Library
+
+on:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  build:
+    name: build (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            lib_name: librlibrary_core.so
+          - os: windows-latest
+            lib_name: rlibrary_core.dll
+          - os: macos-latest
+            lib_name: librlibrary_core.dylib
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: clippy
+        run: cargo clippy --lib --all-targets -- -D warnings
+
+      - name: Build release cdylib
+        run: cargo build --release --lib
+
+      - name: Copy artifact to staging
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/${{ matrix.lib_name }} dist/
+          # Windows 额外带上导入库（.lib）与 pdb
+          if [ -f target/release/rlibrary_core.dll.lib ]; then cp target/release/rlibrary_core.dll.lib dist/; fi
+          if [ -f target/release/rlibrary_core.pdb ]; then cp target/release/rlibrary_core.pdb dist/ || true; fi
+          cp FFI.md dist/ 2>/dev/null || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rlibrary-cdylib-${{ matrix.os }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
+          generate_release_notes: true

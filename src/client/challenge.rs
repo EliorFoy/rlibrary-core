@@ -1,4 +1,36 @@
 use sha1::{Digest, Sha1};
+use std::sync::{LazyLock, RwLock};
+
+pub struct ChallengeCookie{
+    c_token: String,
+    c_time: String,
+    bsrv: String,
+}
+// 1. 在 challenge.rs 给 ChallengeCookie 加 impl 块
+impl ChallengeCookie {
+    fn new() -> Self {
+        Self { c_token: String::new(), c_time: String::new(), bsrv: String::new() }
+    }
+    pub fn update_challenge(&mut self, pairs: &[(String, String)]) {
+        for (k, v) in pairs {
+            match k.as_str() {
+                "c_token" => self.c_token = v.clone(),
+                "c_time" => self.c_time = v.clone(),
+                "bsrv" => self.bsrv = v.clone(),
+                _ => {}
+            }
+        }
+    }
+
+    /// 拼装挑战 cookie 串（不含 remix 凭据与站点模式，供各 API 组装完整 Cookie）
+    pub fn cookie_str(&self) -> String {
+        format!("c_token={}; c_time={}; bsrv={}", self.c_token, self.c_time, self.bsrv)
+    }
+}
+
+
+pub static CHALLENGE_COOKIES: LazyLock<RwLock<ChallengeCookie>> = LazyLock::new(|| RwLock::new(ChallengeCookie::new()));
+
 
 /// PoW 挑战结果
 pub struct Challenge {

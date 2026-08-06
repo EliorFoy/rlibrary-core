@@ -33,7 +33,7 @@ fn save_ip_cache(ip: Ipv4Addr) {
 // 公开 API
 // ---------------------------------------------------------------------------
 
-/// 获取 IP：优先文件缓存，没有则从 diggui 刷新
+/// 获取 IP：优先内存缓存，再文件缓存，最后从 diggui 刷新
 pub async fn get_ip() -> Result<Ipv4Addr, String> {
     // 先尝试从文件缓存中获取
     if let Some(ip) = load_cached_ip() {
@@ -45,14 +45,15 @@ pub async fn get_ip() -> Result<Ipv4Addr, String> {
         return Ok(*ip);
     }
     // 最后从 diggui 刷新
-    let ip = refresh_ip().await.ok_or("diggui 解析失败")?;
+    let ip = refresh_ip().await.map_err(|_| "diggui 解析失败".to_string())?;
     *CACHED_IP.write().unwrap() = Some(ip);
     Ok(ip)
 }
 
-/// 从 diggui 刷新 IP 并写入文件缓存，失败时返回 Err
+/// 从 diggui 刷新 IP 并写入内存缓存 + 文件缓存，失败时返回 Err
 pub async fn refresh_ip() -> Result<Ipv4Addr, String> {
     let ip = resolve_from_diggui().await.ok_or("diggui 解析失败")?;
+    *CACHED_IP.write().unwrap() = Some(ip);
     save_ip_cache(ip);
     Ok(ip)
 }

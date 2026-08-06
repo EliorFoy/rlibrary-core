@@ -1,6 +1,7 @@
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::sync::{Arc, LazyLock};
-
+use std::time::Instant;
+use crate::client::challenge::CHALLENGE_COOKIES;
 use http_body_util::BodyExt as _;
 
 pub const ORIGIN_DOMAIN: &str = "z-library.sk";
@@ -95,7 +96,7 @@ impl RequestBuilder {
     }
 
     pub async fn send(self) -> Result<Response, String> {
-        send_with_redirect(
+        send_with_auto_retry(
             self.client,
             self.url,
             self.method,
@@ -107,7 +108,112 @@ impl RequestBuilder {
     }
 }
 
-/// 构建请求 + 发送 + 自动跟随重定向 + DiamWall 挑战求解
+/// 自动处理 502 / 503 重试的入口
+///
+/// - 502：IP 失效 → `refresh_ip()` 强制换 IP 后重试（最多 1 次）
+/// - 503：DiamWall PoW 挑战 → 解析并求解 → 更新全局 cookie 后重试（最多 1 次）
+/// - 重试后仍失败则直接返回该响应
+async fn send_with_auto_retry(
+    client: HttpClient,
+    url: String,
+    method: http::Method,
+    mut headers: http::HeaderMap,
+    body: Option<bytes::Bytes>,
+    max_redirect: u32,
+) -> Result<Response, String> {
+    let mut retried_ip = false;
+    let mut retried_challenge = 0;
+
+    loop {
+        let resp = send_with_redirect(
+            client.clone(),
+            url.clone(),
+            method.clone(),
+            headers.clone(),
+            body.clone(),
+            max_redirect,
+        )
+        .await?;
+
+        match resp.status().as_u16() {
+            502 if !retried_ip => {
+                crate::client::ip::refresh_ip().await?;
+                retried_ip = true;
+                continue;
+            }
+            503 => {
+                let html = String::from_utf8_lossy(
+                    &resp.body.clone().unwrap_or_default(),
+                )
+                .to_string();
+
+                let Some(ch) = crate::client::challenge::parse_challenge(&html)
+                else {
+                    return Ok(resp);
+                };
+
+                // 首次求解：生成新 cookie 并写全局
+                if retried_challenge == 0 {
+                    let started = Instant::now();
+                    let solution = crate::client::challenge::solve(&ch);
+                    let elapsed_ms = started.elapsed().as_millis() as u64;
+
+                    let cookie = crate::client::challenge::build_challenge_cookie(
+                        &ch, solution, elapsed_ms, None,
+                    );
+
+                    // 把新挑战 cookie 写入全局存储，供后续请求复用
+                    let pairs: Vec<(String, String)> = cookie
+                        .split("; ")
+                        .filter_map(|p| p.split_once('='))
+                        .map(|(k, v)| (k.to_string(), v.to_string()))
+                        .collect();
+                    //crate::account::cookie::update_challenge(&pairs);
+                    CHALLENGE_COOKIES.write().unwrap().update_challenge(&pairs);
+                }
+
+                // 挑战重试：重写 Cookie 头。
+                // 剔除旧挑战段（c_token / c_time / bsrv），保留其余（账号凭据等），
+                // 再追加最新挑战 cookie —— 避免新旧两个 c_token 并存被服务端拒绝。
+                if retried_challenge == 0 {
+                    let old = headers
+                        .get(http::header::COOKIE)
+                        .and_then(|v| v.to_str().ok())
+                        .unwrap_or_default();
+                    let kept: Vec<&str> = old
+                        .split("; ")
+                        .filter(|p| {
+                            let k = p.split('=').next().unwrap_or("");
+                            k != "c_token" && k != "c_time" && k != "bsrv"
+                        })
+                        .collect();
+                    let fresh = crate::client::challenge::CHALLENGE_COOKIES
+                        .read()
+                        .unwrap()
+                        .cookie_str();
+                    let mut merged = kept.join("; ");
+                    if !merged.is_empty() {
+                        merged.push_str("; ");
+                    }
+                    merged.push_str(&fresh);
+                    if let Ok(v) = http::HeaderValue::from_str(&merged) {
+                        headers.insert(http::header::COOKIE, v);
+                    }
+                }
+
+                // 服务端可能按连接限流：短暂等待，让连接池空闲连接失效后新建
+                retried_challenge += 1;
+                if retried_challenge > 3 {
+                    return Ok(resp);
+                }
+                continue;
+            }
+            _ => return Ok(resp),
+        }
+    }
+}
+
+/// 构建请求 + 发送 + 自动跟随重定向
 async fn send_with_redirect(
     client: HttpClient,
     url: String,
@@ -172,7 +278,6 @@ async fn send_with_redirect(
             .map_err(|e| format!("读取响应失败: {e}"))?;
         let body_bytes = collected.to_bytes();
 
-        // ── 情况 B：重定向 ────────────────────────────────────────
         if remaining > 0 {
             if let Some(location) = rh.get(http::header::LOCATION).and_then(|v| v.to_str().ok()) {
                 let mut redirect_headers = headers_for_redirect;
@@ -211,7 +316,6 @@ async fn send_with_redirect(
             }
         }
 
-        // ── 情况 C：正常响应 ─────────────────────────────────────
         return Ok(Response {
             status: status_code,
             headers: rh,
@@ -273,18 +377,19 @@ type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Clone)]
 struct SniConnector {
-    tls: tokio_rustls::TlsConnector,
+    /// 伪造 SNI + 跳过证书验证（origin 与 CDN 均走此链路）
+    tls_forged: tokio_rustls::TlsConnector,
 }
 
 impl SniConnector {
     fn new() -> Self {
-        let tls_config = rustls::ClientConfig::builder()
-            .dangerous()
-            .with_custom_certificate_verifier(Arc::new(NoVerifier))
-            .with_no_client_auth();
-        Self {
-            tls: tokio_rustls::TlsConnector::from(Arc::new(tls_config)),
-        }
+        let tls_forged = tokio_rustls::TlsConnector::from(Arc::new(
+            rustls::ClientConfig::builder()
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(NoVerifier))
+                .with_no_client_auth(),
+        ));
+        Self { tls_forged }
     }
 }
 
@@ -355,7 +460,7 @@ impl tower::Service<http::Uri> for SniConnector {
     }
 
     fn call(&mut self, uri: http::Uri) -> Self::Future {
-        let tls = self.tls.clone();
+        let tls = self.tls_forged.clone();
         Box::pin(async move {
             let host = uri.host().ok_or("URI 缺少 host")?;
             let port = uri.port_u16().unwrap_or(443);
