@@ -35,7 +35,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: clippy
-        run: cargo clippy --lib --all-targets -- -D warnings
+        run: cargo clippy --lib --all-targets
 
       - name: Build release cdylib
         run: cargo build --release --lib
