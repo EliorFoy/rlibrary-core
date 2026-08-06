@@ -58,7 +58,7 @@ pub async fn resolve_download_url(
             .await?;
 
         let status = resp.status().as_u16();
-        eprintln!("[download] 响应状态: {} ({})", status, &current);
+        eprintln!("[download] 响应状态: {} ({})", status, current);
 
         // 此处 current 必为 origin 域名，跟随重定向或解析页面
         let step = follow_origin_response(resp, &current).await?;
