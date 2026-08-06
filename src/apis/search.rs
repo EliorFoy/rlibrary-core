@@ -3,9 +3,10 @@ use crate::models::book::{BookInfo, SearchResult};
 
 /// 组装搜索请求的 Cookie：全局挑战 cookie + 站点模式
 fn build_cookie() -> String {
-    let mut parts = Vec::new();
-    parts.push(crate::client::challenge::CHALLENGE_COOKIES.read().unwrap().cookie_str());
-    parts.push("selectedSiteMode=books".to_string());
+    let parts = [
+        crate::client::challenge::CHALLENGE_COOKIES.read().unwrap().cookie_str(),
+        "selectedSiteMode=books".to_string(),
+    ];
     parts.join("; ")
 }
 

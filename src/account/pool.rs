@@ -60,10 +60,8 @@ fn load_from_db() {
             })
         })
         .expect("读取失败");
-    for row in rows {
-        if let Ok(acct) = row {
-            guard.push(acct);
-        }
+    for row in rows.flatten() {
+        guard.push(row);
     }
 }
 

@@ -1,12 +1,13 @@
 use crate::client::challenge::CHALLENGE_COOKIES;
 use crate::client::sni::{self, ORIGIN_DOMAIN};
-use crate::models::account::LoginResult;
+pub use crate::models::account::LoginResult;
 
 /// 组装登录请求的 Cookie：全局挑战 cookie + 站点模式
 fn build_cookie() -> String {
-    let mut parts = Vec::new();
-    parts.push(CHALLENGE_COOKIES.read().unwrap().cookie_str());
-    parts.push("selectedSiteMode=books".to_string());
+    let parts = [
+        CHALLENGE_COOKIES.read().unwrap().cookie_str(),
+        "selectedSiteMode=books".to_string(),
+    ];
     parts.join("; ")
 }
 

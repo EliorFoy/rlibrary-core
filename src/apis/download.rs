@@ -35,7 +35,7 @@ pub async fn resolve_download_url(
         attempt += 1;
 
         // 若已是 CDN 地址，直接返回，不发起请求
-        if let LocationKind::CDN(cdn_host) = classify_location(&current) {
+        if let LocationKind::Cdn(cdn_host) = classify_location(&current) {
             eprintln!("[download] 最终 CDN 地址: {}", current);
             eprintln!("[download] CDN 主机: {}", cdn_host);
             return Ok(current);
@@ -77,7 +77,7 @@ pub async fn resolve_download_url(
 /// 判断 URL 所属类型
 enum LocationKind {
     Origin,          // z-library.sk 自身域名
-    CDN(String),     // 第三方 CDN 域名，host 信息用于调试
+    Cdn(String),     // 第三方 CDN 域名，host 信息用于调试
 }
 
 fn classify_location(url: &str) -> LocationKind {
@@ -86,7 +86,7 @@ fn classify_location(url: &str) -> LocationKind {
     if host == ORIGIN_DOMAIN {
         LocationKind::Origin
     } else {
-        LocationKind::CDN(host)
+        LocationKind::Cdn(host)
     }
 }
 

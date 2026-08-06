@@ -77,8 +77,12 @@ unsafe fn req_str<'a>(ptr: *const c_char) -> &'a str {
 /// - `query`: 搜索关键词（UTF-8）
 /// - `page`: 页码（从 1 开始）
 /// - 返回 JSON：`{"ok":true,"total":N,"total_pages":N,"page":P,"books":[...]}`
+///
+/// # Safety
+///
+/// `query` 必须为 `NULL` 或指向 NUL 结尾的合法 UTF-8 字符串，且在调用期间保持有效。
 #[unsafe(no_mangle)]
-pub extern "C" fn rlibrary_search(query: *const c_char, page: u32) -> *mut c_char {
+pub unsafe extern "C" fn rlibrary_search(query: *const c_char, page: u32) -> *mut c_char {
     let q = unsafe { req_str(query) }.to_string();
     let json = run(move || {
         let result = runtime().block_on(crate::apis::search::search_books(&q, page))?;
@@ -102,8 +106,12 @@ pub extern "C" fn rlibrary_search(query: *const c_char, page: u32) -> *mut c_cha
 ///
 /// - `email` / `password`: 账号凭据（UTF-8）
 /// - 返回 JSON：`{"ok":true,"remix_userid":"...","remix_userkey":"...","username":"..."}`
+///
+/// # Safety
+///
+/// `email` / `password` 必须为 `NULL` 或指向 NUL 结尾的合法 UTF-8 字符串，且在调用期间保持有效。
 #[unsafe(no_mangle)]
-pub extern "C" fn rlibrary_login(email: *const c_char, password: *const c_char) -> *mut c_char {
+pub unsafe extern "C" fn rlibrary_login(email: *const c_char, password: *const c_char) -> *mut c_char {
     let email = unsafe { req_str(email) }.to_string();
     let password = unsafe { req_str(password) }.to_string();
     let json = run(move || {
@@ -125,8 +133,13 @@ pub extern "C" fn rlibrary_login(email: *const c_char, password: *const c_char) 
 /// - `download_url`: 图书下载链接，如 `https://z-library.sk/dl/xxx`
 /// - `user_id` / `user_key`: 可选账号凭据（可传 null 使用匿名/账号池）
 /// - 返回 JSON：`{"ok":true,"url":"https://dln1.ncdn.ec/..."}`
+///
+/// # Safety
+///
+/// `download_url` 必须为指向 NUL 结尾的合法 UTF-8 字符串且在调用期间保持有效；
+/// `user_id` / `user_key` 可为 `NULL`。所有指针在调用期间不得被释放或修改。
 #[unsafe(no_mangle)]
-pub extern "C" fn rlibrary_resolve_download_url(
+pub unsafe extern "C" fn rlibrary_resolve_download_url(
     download_url: *const c_char,
     user_id: *const c_char,
     user_key: *const c_char,
@@ -152,8 +165,13 @@ pub extern "C" fn rlibrary_resolve_download_url(
 }
 
 /// 释放由本库返回的字符串指针。
+///
+/// # Safety
+///
+/// `ptr` 必须是本库（`rlibrary_*` 函数）返回且未被释放过的指针；传 `NULL` 为无操作，
+/// 但不得传其它来源的指针。
 #[unsafe(no_mangle)]
-pub extern "C" fn rlibrary_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn rlibrary_free_string(ptr: *mut c_char) {
     if ptr.is_null() {
         return;
     }

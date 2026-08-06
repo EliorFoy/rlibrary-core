@@ -12,7 +12,7 @@ type HttpClient = hyper_util::client::legacy::Client<
     http_body_util::combinators::BoxBody<bytes::Bytes, hyper::Error>,
 >;
 
-pub static CLIENT: LazyLock<SniBypassClient> = LazyLock::new(|| SniBypassClient::new());
+pub static CLIENT: LazyLock<SniBypassClient> = LazyLock::new(SniBypassClient::new);
 
 pub struct SniBypassClient {
     inner: HttpClient,
@@ -238,6 +238,7 @@ async fn send_with_redirect(
             .method(&method)
             .uri(&url);
 
+        #[allow(clippy::collapsible_if)]
         if !headers.contains_key(http::header::HOST) {
             if let Ok(parsed) = url::Url::parse(&url) {
                 if let Some(host) = parsed.host_str() {
@@ -278,8 +279,11 @@ async fn send_with_redirect(
             .map_err(|e| format!("读取响应失败: {e}"))?;
         let body_bytes = collected.to_bytes();
 
-        if remaining > 0 {
-            if let Some(location) = rh.get(http::header::LOCATION).and_then(|v| v.to_str().ok()) {
+        if remaining > 0
+            && let Some(location) = rh
+                .get(http::header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+        {
                 let mut redirect_headers = headers_for_redirect;
                 let cookies: Vec<String> = rh
                     .get_all(http::header::SET_COOKIE)
@@ -300,7 +304,7 @@ async fn send_with_redirect(
                     }
                 }
                 url = resolve_url(&orig_url, location);
-                method = if matches!(status_code, 301 | 302 | 303) {
+                method = if matches!(status_code, 301..=303) {
                     http::Method::GET
                 } else {
                     method
@@ -314,7 +318,6 @@ async fn send_with_redirect(
                 remaining -= 1;
                 continue;
             }
-        }
 
         return Ok(Response {
             status: status_code,
@@ -466,7 +469,7 @@ impl tower::Service<http::Uri> for SniConnector {
             let port = uri.port_u16().unwrap_or(443);
 
             let ip = if host == ORIGIN_DOMAIN {
-                crate::client::ip::get_ip().await.map_err(|e| e)?
+                crate::client::ip::get_ip().await?
             } else {
                 format!("{host}:{port}")
                     .to_socket_addrs()
